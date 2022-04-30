@@ -8,6 +8,7 @@ import logging.config
 import discord
 import requests
 import datetime as dt
+from discord import Webhook, RequestsWebhookAdapter
 from requests.auth import HTTPDigestAuth
 from discord.ext import commands
 from discord_slash.utils.manage_commands import create_option, create_choice, SlashCommandOptionType
@@ -25,7 +26,31 @@ class NestrCog(commands.Cog, name='Nestr functions'):
         self.logger = logging.getLogger(__name__)
         self.bot = bot
         self.db = TinyDB('/app/db.json')
-        
+
+    # webhook listener
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.content.startswith("!webhook-login"):
+            parts = message.content.split(" ")
+            if len(parts) == 4:
+                uid = parts[1]
+                userid = parts[2]
+                token = parts[3]
+                
+                # store or update userid and token
+                User = Query()
+                user = self.db.search(User.id == uid)
+                if len(user) == 0:
+                    self.db.insert({'id': uid, 'userid': userid, 'token': token})
+                else:
+                    self.db.upsert({'id': uid, 'userid': userid, 'token': token}, User.id == uid)
+
+            hooks = await message.guild.webhooks()
+            if len(hooks) > 0:
+                webhook = Webhook.from_url(hooks[0].url, adapter=RequestsWebhookAdapter())
+                webhook.send(f'{message.author}: Login message processed.')
+                await webhook.delete_message(message.id)
+
 
     @cog_ext.cog_slash(name="inbox",
                        description="Adds a new inbox todo",
