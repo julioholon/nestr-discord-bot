@@ -29,26 +29,54 @@ class NestrCog(commands.Cog, name='Nestr functions'):
     # webhook listener
     @commands.Cog.listener()
     async def on_message(self, message):
+        # messages like: !webhook-login|123123123123|Chn6AGBTysKCnXESc|Chn6AGBTysKCnXEScChn6AGBTysKCnXESc
         if message.content.startswith("!webhook-login"):
             parts = message.content.split("|")
             if len(parts) == 4:
-                uid = parts[1]
+                discord_uid = parts[1]
                 userid = parts[2]
                 token = parts[3]
                 
                 # store or update userid and token
                 User = Query()
-                user = self.db.search(User.id == uid)
+                user = self.db.search(User.id == discord_uid)
                 if len(user) == 0:
-                    self.db.insert({'id': uid, 'userid': userid, 'token': token})
+                    self.db.insert({'id': discord_uid, 'userid': userid, 'token': token})
                 else:
-                    self.db.upsert({'id': uid, 'userid': userid, 'token': token}, User.id == uid)
+                    self.db.upsert({'id': discord_uid, 'userid': userid, 'token': token}, User.id == discord_uid)
 
+                # delete the received message
                 hooks = await message.guild.webhooks()
-                if len(hooks) > 0:
+                hook = next((x for x in hooks if x.name == "Nestr"), None)
+                if hook:
                     webhook = Webhook.from_url(hooks[0].url, adapter=RequestsWebhookAdapter())
-                    webhook.send(f'{uid}: Login message processed.')
-                    await webhook.delete_message(message.id)
+                    webhook.delete_message(message.id)
+
+        # messages like: !webhook-notification|123123123123123|Title|Content
+        if message.content.startswith("!webhook-notification"):
+            parts = message.content.split("|")
+            if len(parts) == 4:
+                discord_uid = int(parts[1])
+                title = parts[2]
+                content = parts[3]
+                
+                # send pm to user
+                user = await message.channel.guild.fetch_member(discord_uid)
+                if user:
+                    embed = discord.Embed(
+                        title="Nestr Notification",
+                        description=title,
+                        color=0x4A44EE,
+                    )
+                    embed.add_field(name="Contents", value=content)
+                    await user.send(embed=embed)
+
+                # delete the received message
+                hooks = await message.guild.webhooks()
+                hook = next((x for x in hooks if x.name == "Nestr"), None)
+                if hook:
+                    webhook = Webhook.from_url(hooks[0].url, adapter=RequestsWebhookAdapter())
+                    webhook.delete_message(message.id)
 
 
     @cog_ext.cog_slash(name="inbox",
@@ -95,9 +123,13 @@ class NestrCog(commands.Cog, name='Nestr functions'):
                        )
     async def login(self, ctx: SlashContext):
         """Nestr login"""
-
-        url = nestr_url + "/authenticate?discord_bot_callback_id=" + quote(ctx.author.name+"#"+ctx.author.discriminator)
-        await ctx.send("Please login clicking on [this link]("+url+").", hidden=True)
+        print(f"Login: User {ctx.author.id}: {ctx.author.name}")
+        hooks = await ctx.guild.webhooks()
+        if len(hooks) > 0:
+            url = nestr_url + "/authenticate?bot_callback="+hooks[0].url+"&discord_id=" + str(ctx.author.id)
+            await ctx.send("Please login clicking on [this link]("+url+").", hidden=True)
+        else:
+            await ctx.send("[ERROR] Webhook not configured!", hidden=True)
 
 def setup(bot):
     bot.add_cog(NestrCog(bot))
