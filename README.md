@@ -11,6 +11,10 @@ Welcome to the Python Discord bot for Nestr!
 - `server.py`: This is the bot code.
 - `db.json`: the server json database file
 
+# How to use?
+
+In order for this to use you have to create a webhook on you server called "Nestr", that receives messages to a private channel, that only the bot can access.
+
 # Interact
 
 Type `?help or /help or $help`!
