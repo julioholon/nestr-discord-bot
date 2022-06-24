@@ -1,4 +1,4 @@
-# Nestr Python Discord Starter
+# Nestr Python Discord Bot
 
 Welcome to the Python Discord bot for Nestr!
 
