@@ -98,10 +98,9 @@ class Admin(commands.Cog, name='Admin'):
             description="All Nestr Bot commands",
             color=0xED4245,
         )
-        embed.add_field(name="/login", value="   - Logs you into Nestr")
-        embed.add_field(name="/inbox", value="   - Adds a new todo to your inbox")
-        embed.set_footer(text="Made with Python | https://github.com/juliomonteiro/",
-                         icon_url="https://i.imgur.com/5BFecvA.png")
+        embed.add_field(name="/login", value="Logs you into Nestr", inline=False)
+        embed.add_field(name="/inbox", value="Adds a new todo to your Nestr Inbox", inline=False)
+        embed.add_field(name="/search", value="Search Nestr", inline=False)
         return await ctx.send(embed=embed)
 
 def setup(bot):
