@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 cogs_dir = "cogs"
 
 bot = commands.Bot(command_prefix="!", description='The Nestr bot using slash commands', self_bot=True,
-                   intents=discord.Intents.default())
+                   intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.all())
 slash = SlashCommand(bot, sync_commands=True)
 
 # Load the extensions(cogs) that are located in the cogs directory. Any file in here attempts to load.

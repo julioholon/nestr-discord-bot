@@ -47,8 +47,12 @@ class NestrCog(commands.Cog, name='Nestr functions'):
         return None
     
     def get_synced_roles(self, ctx):
-        Workspace = Query()
-        return self.db.search((Workspace.guild_id == ctx.guild.id) & Workspace.role_id.exists())
+        Role = Query()
+        return self.db.search((Role.guild_id == ctx.guild.id) & Role.role_id.exists())
+
+    def get_synced_circles(self, ctx):
+        Circle = Query()
+        return self.db.search((Circle.guild_id == ctx.guild.id) & Circle.circle_id.exists())
 
     async def delete_webhook_message(self, message):
         hooks = await message.guild.webhooks()
@@ -346,7 +350,6 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             while (len(workspaces)): 
                 buttons = []
                 for ws in workspaces:
-                    print(ws)
                     b = create_button(
                         style=ButtonStyle.blue,
                         label=ws.get('workspace_name'),
@@ -460,29 +463,41 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             await ctx.send("Please /login to Nestr first.", hidden=True)
             return
         try:
-            roles = self.get_synced_roles(ctx)
+            valid_roles = self.get_synced_roles(ctx)
+            synced_circles = {circle.get("circle_id"): circle for circle in self.get_synced_circles(ctx)}
             text = search
             search_text = "label:circleplus-accountability "+search
             accs = await self.get_search_results(user, search_text, 100)
             accs_sorted = sorted(accs, key=lambda acc: acc.get("parentId"))
             keys = [key for key,group in groupby(accs_sorted, key=lambda acc: acc.get("parentId"))]
-            res = [role for role in roles if role.get("role_id") in keys]
+            res = [role for role in valid_roles if role.get("role_id") in keys]
+            res_sorted = sorted(res, key=lambda res: res.get("parent_circle"))
+            grouped_roles = {}
+            for k,g in groupby(res_sorted, key=lambda res: res.get("parent_circle")):
+                grouped_roles[k] = list(g)
 
             embed = discord.Embed(
                 title="Accountable roles",
                 color=0x4A44EE,
-                description=f"Roles holding accountabilites matching query `{search}`",
+                description=f"Roles accountable for `{search}`",
                 url=nestr_base_url+quote("/search/"+search_text),
             )
-            for role in res:
-                title = role.get('role_name')
-                link = nestr_base_url+"/n/"+role.get('role_id')
-                role_text = ""
-                for acc in accs:
-                    if acc.get("parentId") == role.get("role_id"):
-                        acc_title = bs(acc.get('title'), "html.parser").text
-                        role_text += f"- {acc_title}\n"
-                embed.add_field(name=f"🎭[{title}]({link})", value=role_text, inline=False)
+            for circle_id in grouped_roles.keys():
+                if circle_id not in synced_circles.keys():
+                    continue
+                circle = synced_circles[circle_id]
+                circle_title = circle.get("circle_name")
+                circle_link = nestr_base_url+"/n/"+circle_id
+                embed.add_field(name=f"🔵 Circle", value=f"[{circle_title}]({circle_link})", inline=False)
+                for role in grouped_roles[circle_id]:
+                    title = role.get('role_name')[:100]
+                    link = nestr_base_url+"/n/"+role.get('role_id')
+                    role_text = ""
+                    for acc in accs:
+                        if acc.get("parentId") == role.get("role_id"):
+                            acc_title = bs(acc.get('title'), "html.parser").text
+                            role_text += f"> - {acc_title}\n"
+                    embed.add_field(name=f"> 🎭 {title} - {link}", value=f"{role_text}", inline=False)
             
             await ctx.send(embed=embed)
         except Exception as err:
@@ -510,37 +525,58 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             await ctx.send("Please /login to Nestr first.", hidden=True)
             return
         try:
+            valid_roles = [role.get("role_id") for role in self.get_synced_roles(ctx)]
+            synced_circles = {circle.get("circle_id"): circle for circle in self.get_synced_circles(ctx)}
             res = []
+            mention = ""
             if who:
-                print (who.id)
                 db_user = self.get_loggedin_user(who.id)
                 if not db_user:
                     await ctx.send("That user never logged in to Nestr.", hidden=True)
                     return
                 text = who.name
+                mention = f"{who.mention}"
                 search_text = "label:circleplus-role assignee:"+db_user['nestr_id']
                 res = await self.get_search_results(user, search_text, 100)
+                res = [role for role in res if role.get("_id") in valid_roles]
+
             else:
                 text = "me"
+                mention = f"{ctx.author.mention}"
                 search_text = "label:circleplus-role assignee:me"
                 res = await self.get_search_results(user, search_text, 100)
+                res = [role for role in res if role.get("_id") in valid_roles]
             count = len(res)
-            results = await ctx.send(f"Found {count} roles for '{text}'.")
 
-            for nest in res:
-                title = bs(nest.get('title', "No title")[:100], "html.parser").text
-                description = bs(nest.get('description', "No description.")[:4090], "html.parser").text
-                link = nestr_base_url+"/n/"+nest.get('_id')
-                embed = discord.Embed(
-                    title=title,
-                    description=description,
-                    color=0x4A44EE,
-                    url=link
-                )
-                await results.reply(embed=embed)
+            res_sorted = sorted(res, key=lambda res: res.get("parentId"))
+            grouped_roles = {}
+            for k,g in groupby(res_sorted, key=lambda res: res.get("parentId")):
+                grouped_roles[k] = list(g)
+
+            embed = discord.Embed(
+                title="Roles",
+                color=0x4A44EE,
+                description=f"Roles for {mention}",
+                url=nestr_base_url+quote("/search/"+search_text),
+            )
+            for circle_id in grouped_roles.keys():
+                if circle_id not in synced_circles.keys():
+                    continue
+                circle = synced_circles[circle_id]
+                circle_title = circle.get("circle_name")
+                circle_link = nestr_base_url+"/n/"+circle_id
+                embed.add_field(name=f"🔵 Circle", value=f"[{circle_title}]({circle_link})", inline=False)
+                for role in grouped_roles[circle_id]:
+                    title = bs(role.get('title', "No title")[:100], "html.parser").text
+                    purpose = bs(role.get('purpose', "No title")[:200], "html.parser").text
+                    link = nestr_base_url+"/n/"+role.get('_id')
+                    embed.add_field(name=f"> 🎭 {title} - {link}", value=f"> {purpose}", inline=False)
+                    # \n> >[link]({link})
+
+            await ctx.send(embed=embed)
         except Exception as err:
             await ctx.send("{0}".format(err), hidden=True)
-
+            raise
         self.logger.info(f"{ts}: {ctx.author} executed '/roles'\n")
 
 
