@@ -52,7 +52,8 @@ class NestrCog(commands.Cog, name='Nestr functions'):
 
     def get_synced_circles(self, ctx):
         Circle = Query()
-        return self.db.search((Circle.guild_id == ctx.guild.id) & Circle.circle_id.exists())
+        circles = self.db.search((Circle.guild_id == ctx.guild.id) & Circle.circle_id.exists())
+        return circles
 
     async def delete_webhook_message(self, message):
         hooks = await message.guild.webhooks()
@@ -92,6 +93,10 @@ class NestrCog(commands.Cog, name='Nestr functions'):
                 self.db.insert({'workspace_id': workspace_id,
                                 'workspace_name': workspace_name,
                                 'prefix': prefix,
+                                'circle_id': workspace_id,
+                                'circle_name': workspace_name,
+                                'discord_name': workspace_name,
+                                'parent_circle': "",
                                 'sync_at': dt.datetime.now().isoformat(),
                                 'guild_id': ctx.guild.id})
             else:
@@ -102,7 +107,6 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             self.db.storage.flush()
             return True
         elif (resp.status_code != 200):
-            print (resp.status_code)
             print(resp.json())
             raise RuntimeError("Unable to sync workspace.")
 
@@ -479,7 +483,7 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             embed = discord.Embed(
                 title="Accountable roles",
                 color=0x4A44EE,
-                description=f"Roles accountable for `{search}`",
+                description=f"Roles accountable for `{search}` (top 25 items)",
                 url=nestr_base_url+quote("/search/"+search_text),
             )
             for circle_id in grouped_roles.keys():
@@ -498,11 +502,14 @@ class NestrCog(commands.Cog, name='Nestr functions'):
                             acc_title = bs(acc.get('title'), "html.parser").text
                             role_text += f"> - {acc_title}\n"
                     embed.add_field(name=f"> 🎭 {title} - {link}", value=f"{role_text}", inline=False)
+            if len(grouped_roles) == 0:
+                    embed.add_field(name=f"No results found", value="...", inline=False)
             
             await ctx.send(embed=embed)
         except Exception as err:
             await ctx.send("{0}".format(err), hidden=True)
             raise
+
 
     ##### /roles command ####
     @cog_ext.cog_slash(name="roles",
@@ -556,7 +563,7 @@ class NestrCog(commands.Cog, name='Nestr functions'):
             embed = discord.Embed(
                 title="Roles",
                 color=0x4A44EE,
-                description=f"Roles for {mention}",
+                description=f"Roles for {mention} (showing top 25)",
                 url=nestr_base_url+quote("/search/"+search_text),
             )
             for circle_id in grouped_roles.keys():
@@ -572,12 +579,129 @@ class NestrCog(commands.Cog, name='Nestr functions'):
                     link = nestr_base_url+"/n/"+role.get('_id')
                     embed.add_field(name=f"> 🎭 {title} - {link}", value=f"> {purpose}", inline=False)
                     # \n> >[link]({link})
+                if len(grouped_roles) == 0:
+                    embed.add_field(name=f"No roles found", value="...", inline=False)
 
             await ctx.send(embed=embed)
         except Exception as err:
             await ctx.send("{0}".format(err), hidden=True)
             raise
         self.logger.info(f"{ts}: {ctx.author} executed '/roles'\n")
+
+    ##### /todos command ####
+    @cog_ext.cog_slash(name="todos",
+                       description="Todos for a user or role",
+                       options = [
+                          create_option(
+                              name="who",
+                              description="Todos for someone",
+                              option_type=SlashCommandOptionType.USER,
+                              required=False),
+                          create_option(
+                              name="role",
+                              description="Todos for some role",
+                              option_type=SlashCommandOptionType.ROLE,
+                              required=False),
+                       ])
+    async def todos(self, ctx: SlashContext, who: discord.User=None, role: discord.Role=None):
+        """Search nestr for Todos"""
+
+        ts = dt.datetime.now().strftime('%d-%b-%y %H:%M:%S')
+        
+        # check if user logged in
+        user = self.get_loggedin_user(ctx.author.id)
+        if user == None:
+            await ctx.send("Please /login to Nestr first.", hidden=True)
+            return
+        try:
+            valid_role_ids = [role.get("role_id") for role in self.get_synced_roles(ctx)]
+            valid_circle_ids = [circle.get("circle_id") for circle in self.get_synced_circles(ctx)]
+            res = []
+            mention = ""
+            if role:
+                mention = f"{role.mention}"
+                search_text = "label:!project has:completable"
+                clean_role_name = bs(role.name, "html.parser").text
+                db_roles = [r for r in self.get_synced_roles(ctx) if r.get("discord_name") == clean_role_name]
+                if len(db_roles) == 0:
+                    await ctx.send(f"Role {role.name} not present on Nestr.", hidden=True)
+                    return
+                db_role = db_roles[0]
+                res = await self.get_search_results(user, search_text, 100, context_id=db_role.get("role_id"))
+            elif who:
+                db_user = self.get_loggedin_user(who.id)
+                if not db_user:
+                    await ctx.send("That user never logged in to Nestr.", hidden=True)
+                    return
+                mention = f"{who.mention}"
+                search_text = "label:!project has:completable parent-labels:circleplus-role,circleplus-circle,circleplus-anchor-circle assignee:"+db_user['nestr_id']
+                res = await self.get_search_results(user, search_text, 200)
+
+            else:
+                mention = f"{ctx.author.mention}"
+                search_text = "label:!project has:completable parent-labels:circleplus-role,circleplus-circle,circleplus-anchor-circle assignee:"+user['nestr_id']
+                res = await self.get_search_results(user, search_text, 200)
+                
+
+            res = [todo for todo in res if todo.get("parentId") in valid_role_ids or todo.get("parentId") in valid_circle_ids]
+            res_sorted = sorted(res, key=lambda res: res.get("parentId"))
+            grouped_todos = {}
+            for k,g in groupby(res_sorted, key=lambda res: res.get("parentId")):
+                grouped_todos[k] = list(g)
+
+            embed = discord.Embed(
+                title="Todos",
+                color=0x4A44EE,
+                description=f"Todos for {mention} (page 1)",
+                url=nestr_base_url+quote("/search/"+search_text),
+            )
+            synced_roles = {role.get("role_id"):role for role in self.get_synced_roles(ctx)}
+            synced_circles = {circle.get("circle_id"):circle for circle in self.get_synced_circles(ctx)}
+            item_count=0
+            page=1
+            for parent_id in grouped_todos.keys():
+                if parent_id in valid_circle_ids:
+                    circle = synced_circles[parent_id]
+                    circle_title = circle.get("circle_name")
+                    circle_link = nestr_base_url+"/n/"+parent_id
+                    embed.add_field(name=f"🔵 Circle", value=f"[{circle_title}]({circle_link})", inline=False)
+                    for todo in grouped_todos[parent_id]:
+                        title = bs(todo.get('title', "No title")[:200], "html.parser").text
+                        link = nestr_base_url+"/n/"+todo.get('_id')
+                        embed.add_field(name=f"> 📃 {title}", value=f"> 🔗 [link]({link})", inline=False)
+                        item_count+=1
+                elif parent_id in valid_role_ids:
+                    role = synced_roles[parent_id]
+                    role_id = role.get("role_id")
+                    role_title = role.get("role_name")
+                    role_link = nestr_base_url+"/n/"+parent_id
+                    embed.add_field(name=f"  🎭Role", value=f"[{role_title}]({role_link})", inline=False)
+                    for todo in grouped_todos[role_id]:
+                        title = bs(todo.get('title', "No title")[:200], "html.parser").text
+                        link = nestr_base_url+"/n/"+todo.get('_id')
+                        embed.add_field(name=f"> 📃 {title}", value=f"> 🔗 [link]({link})", inline=False)
+                        item_count+=1
+                    
+                if item_count > 20:
+                    await ctx.send(embed=embed)
+                    page+=1
+                    item_count=0
+                    embed = discord.Embed(
+                        title="Todos",
+                        color=0x4A44EE,
+                        description=f"Todos for {mention} (page {page})",
+                        url=nestr_base_url+quote("/search/"+search_text),
+                    )
+
+                    
+                if len(grouped_todos) == 0:
+                    embed.add_field(name=f"No todos found", value="...", inline=False)
+
+            await ctx.send(embed=embed)
+        except Exception as err:
+            await ctx.send("{0}".format(err), hidden=True)
+            raise
+        self.logger.info(f"{ts}: {ctx.author} executed '/todos'\n")
 
 
 def setup(bot):
